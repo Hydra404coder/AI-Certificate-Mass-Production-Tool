@@ -500,6 +500,211 @@ html {
   animation: float 6s ease-in-out infinite;
 }
 
+/* Connect Sections */
+.connect-section-hero,
+.connect-section-cta {
+  margin-top: 2.5rem;
+  text-align: center;
+  animation: fadeInUp 1.2s ease-out 0.3s both;
+  position: relative;
+  z-index: 20;
+}
+
+.connect-label {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-bottom: 1rem;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  animation: textGlow 3s ease-in-out infinite;
+}
+
+@keyframes textGlow {
+  0%, 100% {
+    color: var(--text-secondary);
+    text-shadow: none;
+  }
+  50% {
+    color: var(--accent-cyan);
+    text-shadow: 0 0 10px rgba(6, 182, 212, 0.4);
+  }
+}
+
+.connect-links {
+  display: flex;
+  gap: 1.5rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.connect-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: rgba(139, 92, 246, 0.1);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  border-radius: 25px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+  pointer-events: auto;
+  z-index: 10;
+}
+
+/* Email button specific styling */
+button.connect-link {
+  border: 1px solid rgba(139, 92, 246, 0.3);
+}
+
+/* Email container for tooltip positioning */
+.email-container {
+  position: relative;
+  display: inline-block;
+}
+
+/* Email tooltip (speech bubble) */
+.email-tooltip {
+  position: absolute;
+  top: calc(100% + 15px);
+  left: 50%;
+  transform: translateX(-50%) translateY(10px);
+  opacity: 0;
+  animation: tooltipSlideIn 0.3s ease-out forwards;
+  z-index: 100;
+}
+
+@keyframes tooltipSlideIn {
+  to {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+  }
+}
+
+.email-tooltip-content {
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  border: 1px solid rgba(139, 92, 246, 0.5);
+  border-radius: 12px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 20px rgba(139, 92, 246, 0.3);
+  white-space: nowrap;
+  position: relative;
+}
+
+/* Speech bubble arrow */
+.email-tooltip-content::before {
+  content: '';
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-bottom: 8px solid rgba(139, 92, 246, 0.5);
+}
+
+.email-tooltip-content::after {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 7px solid transparent;
+  border-right: 7px solid transparent;
+  border-bottom: 7px solid #1e293b;
+}
+
+.email-text {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: monospace;
+  letter-spacing: 0.3px;
+}
+
+.copy-btn {
+  background: rgba(139, 92, 246, 0.2);
+  border: 1px solid rgba(139, 92, 246, 0.4);
+  border-radius: 6px;
+  padding: 6px 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-purple);
+  transition: all 0.2s ease;
+}
+
+.copy-btn:hover {
+  background: rgba(139, 92, 246, 0.3);
+  border-color: var(--accent-purple);
+  transform: scale(1.05);
+}
+
+.copy-btn svg {
+  display: block;
+}
+
+.connect-link::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: rgba(139, 92, 246, 0.2);
+  transform: translate(-50%, -50%);
+  transition: width 0.4s, height 0.4s;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.connect-link:hover::before {
+  width: 200px;
+  height: 200px;
+}
+
+.connect-link:hover {
+  border-color: var(--accent-purple);
+  color: var(--text-primary);
+  transform: translateY(-3px);
+  box-shadow: 0 4px 20px rgba(139, 92, 246, 0.3);
+}
+
+.connect-link svg {
+  position: relative;
+  z-index: 1;
+  transition: transform 0.3s ease;
+}
+
+.connect-link:hover svg {
+  transform: scale(1.1) rotate(5deg);
+}
+
+/* Responsive connect sections */
+@media (max-width: 640px) {
+  .connect-links {
+    gap: 1rem;
+  }
+  
+  .connect-link {
+    padding: 8px 16px;
+    font-size: 13px;
+  }
+}
+
 /* Selection */
 ::selection {
   background: var(--accent-purple);
