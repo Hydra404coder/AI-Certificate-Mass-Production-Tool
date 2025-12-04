@@ -1,5 +1,3 @@
-newyguy
-
 import sys
 import os
 import string
@@ -20,6 +18,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QSplitter, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QLineEdit, QScrollArea, QFileDialog, QMessageBox,
     QGroupBox, QFrame, QToolButton, QSizePolicy, QColorDialog
+    , QComboBox, QSpinBox, QDialog, QSlider
 )
 
 # -------------------------
@@ -32,6 +31,10 @@ class TextStyle:
     italic: bool = False
     underline: bool = False
     color: QColor = field(default_factory=lambda: QColor(20, 20, 20))
+    # Optional explicit font size (points). If None or 0, auto-scaling is used.
+    size: Optional[int] = None
+    # Optional font family name. If empty, default system font is used.
+    family: str = ""
 
 @dataclass
 class MaskRegion:
@@ -366,12 +369,39 @@ class VarAssignPanel(QGroupBox):
                     if col.isValid():
                         # update button background
                         button.setStyleSheet(f"background: rgb({col.red()},{col.green()},{col.blue()}); color: white; font-weight:600;")
-                        st = TextStyle(bold=btn_b.isChecked(), italic=btn_i.isChecked(), underline=btn_u.isChecked(), color=col)
+                        # preserve current size/family values if present
+                        try:
+                            fam = font_combo.currentText() if font_combo.currentText() else ''
+                            s_val = size_spin.value() if size_spin.value() > 0 else None
+                        except Exception:
+                            fam = getattr(m.style, 'family', '')
+                            s_val = getattr(m.style, 'size', None)
+                        st = TextStyle(bold=btn_b.isChecked(), italic=btn_i.isChecked(), underline=btn_u.isChecked(), color=col, size=s_val, family=fam)
                         self.styleChanged.emit(letter, st)
                 return _pick
 
             btn_color.clicked.connect(make_color_picker(m.letter, btn_color))
 
+            # Font size control (0 == auto)
+            size_spin = QSpinBox()
+            size_spin.setRange(0, 200)
+            size_spin.setFixedWidth(72)
+            size_spin.setToolTip("Font size in points (0 = auto)")
+            size_spin.setSpecialValueText("Auto")
+            size_val = m.style.size if getattr(m.style, 'size', None) else 0
+            size_spin.setValue(size_val)
+
+            # Font family dropdown
+            font_combo = QComboBox()
+            font_combo.setEditable(False)
+            font_combo.setFixedWidth(140)
+            common_fonts = ["", "Segoe UI", "Arial", "Times New Roman", "Georgia", "Courier New", "Roboto", "Inter"]
+            font_combo.addItems(common_fonts)
+            # preselect if present
+            if getattr(m.style, 'family', ''):
+                idx = font_combo.findText(m.style.family)
+                if idx >= 0:
+                    font_combo.setCurrentIndex(idx)
             # NEW delete button
             btn_del = QToolButton()
             btn_del.setText("✕")
@@ -391,11 +421,17 @@ class VarAssignPanel(QGroupBox):
             edit.textChanged.connect(make_edit_changed(m.letter))
 
             def make_style_toggled(letter):
-                def _update_style():
+                def _update_style(*args):
+                    # Read current values from controls (captures btn_*, size_spin, font_combo)
+                    fam = font_combo.currentText() if font_combo.currentText() else ""
+                    s_val = size_spin.value() if size_spin.value() > 0 else None
                     st = TextStyle(
                         bold=btn_b.isChecked(),
                         italic=btn_i.isChecked(),
-                        underline=btn_u.isChecked()
+                        underline=btn_u.isChecked(),
+                        color=m.style.color if hasattr(m.style, 'color') else QColor(20,20,20),
+                        size=s_val,
+                        family=fam
                     )
                     self.styleChanged.emit(letter, st)
                 return _update_style
@@ -404,6 +440,8 @@ class VarAssignPanel(QGroupBox):
             btn_b.toggled.connect(lambda _: updater())
             btn_i.toggled.connect(lambda _: updater())
             btn_u.toggled.connect(lambda _: updater())
+            size_spin.valueChanged.connect(lambda _: updater())
+            font_combo.currentTextChanged.connect(lambda _: updater())
 
             hl.addWidget(label)
             hl.addWidget(edit, 1)
@@ -411,10 +449,12 @@ class VarAssignPanel(QGroupBox):
             hl.addWidget(btn_i)
             hl.addWidget(btn_u)
             hl.addWidget(btn_color)
+            hl.addWidget(size_spin)
+            hl.addWidget(font_combo)
             hl.addWidget(btn_del)  # NEW
             self.container_layout.addWidget(row)
 
-            self.letter_rows[m.letter] = (edit, btn_b, btn_i, btn_u, btn_color, btn_del)  # NEW
+            self.letter_rows[m.letter] = (edit, btn_b, btn_i, btn_u, btn_color, size_spin, font_combo, btn_del)
 
         if not masks:
             info = QLabel("No masks detected. Add manually on the Preview → Manual Masking.")
@@ -516,9 +556,7 @@ class TemplateCanvas(QWidget):
         sx = disp_w / iw
         sy = disp_h / ih
 
-        # Draw masks (rectangles + letters)
-        pen = QPen(QColor(220, 50, 50), 2, Qt.PenStyle.SolidLine)
-        painter.setPen(pen)
+        # Draw masks: always draw label text; draw red boundary and handles only for selected mask
         for idx, m in enumerate(self.masks):
             x, y, w, h = qrect_to_tuple(m.rect)
             rx = int(canvas_rect.x() + x * sx)
@@ -534,65 +572,62 @@ class TemplateCanvas(QWidget):
             painter.rotate(m.rotation)
             painter.translate(-cx, -cy)
 
-            painter.drawRect(QRect(rx, ry, rw, rh))
+            # Draw boundary only for selected mask
+            if self.selected_mask_idx == idx:
+                painter.setPen(QPen(QColor(220, 50, 50), 2, Qt.PenStyle.SolidLine))
+                painter.drawRect(QRect(rx, ry, rw, rh))
 
-            # Letter tag at top-left
-            font = QFont()
-            font.setBold(True)
-            painter.setFont(font)
-            tag_color = self.styles.get(m.letter, TextStyle()).color if m.letter in self.styles else QColor(220, 50, 50)
-            painter.setPen(tag_color)
-            painter.drawText(QRect(rx + 4, ry + 2, 40, 22), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, m.letter)
-
-            # Draw assignment text live
-            text = self.assignments.get(m.letter, "")
-            if text:
-                f = QFont()
+            # Draw the assigned label text; respect per-variable font family if set
+            label = self.assignments.get(m.letter, m.label_text)
+            if label:
                 st = self.styles.get(m.letter, TextStyle())
+                # Default preview size 20 unless a size is set; then use that size for clarity
+                preview_size = int(getattr(st, 'size', 0)) if getattr(st, 'size', None) else 20
+                fam = getattr(st, 'family', '')
+                if fam:
+                    f = QFont(fam, preview_size)
+                else:
+                    f = QFont("Arial", preview_size)
                 f.setBold(st.bold)
                 f.setItalic(st.italic)
                 f.setUnderline(st.underline)
-                px = max(10, min(48, int(h * sy * 0.5)))
-                f.setPointSize(px)
                 painter.setFont(f)
-                st = self.styles.get(m.letter, TextStyle())
-                painter.setPen(st.color)
-                painter.drawText(QRect(rx + 6, ry + 4, rw - 12, rh - 8),
-                                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                                 text)
+                painter.setPen(st.color if hasattr(st, 'color') else QColor(20,20,20))
+                fm = QFontMetrics(f)
+                tw = fm.horizontalAdvance(label)
+                th = fm.height()
+                tx = rx + (rw - tw) // 2
+                ty = ry + (rh + th) // 2 - fm.descent()
+                painter.drawText(tx, ty, label)
 
-            # --- Interactive controls overlay (draw for all masks; highlight selected) ---
-            # Draw handles: 4 corners, 4 edges, rotate button, drag handle
+            # --- Interactive controls overlay: only for selected mask ---
             if self.selected_mask_idx == idx:
                 handle_color = QColor(50, 120, 230)
                 handle_fill = QColor(220, 240, 255)
-            else:
-                handle_color = QColor(160, 160, 160)
-                handle_fill = QColor(250, 250, 250)
-            painter.setPen(QPen(handle_color, 2))
-            painter.setBrush(handle_fill)
-            # Get 8 handle positions (corners + edges)
-            pts = [
-                (rx, ry),
-                (rx + rw // 2, ry),
-                (rx + rw, ry),
-                (rx + rw, ry + rh // 2),
-                (rx + rw, ry + rh),
-                (rx + rw // 2, ry + rh),
-                (rx, ry + rh),
-                (rx, ry + rh // 2)
-            ]
-            for i, (px, py) in enumerate(pts):
-                painter.drawEllipse(QPoint(px, py), self.handle_radius, self.handle_radius)
-            # Rotate handle (above top center)
-            rot_px = rx + rw // 2
-            rot_py = ry - self.rotate_handle_offset
-            painter.setBrush(handle_fill.darker(110))
-            painter.drawEllipse(QPoint(rot_px, rot_py), self.handle_radius + 2, self.handle_radius + 2)
-            painter.drawText(QRect(rot_px - 10, rot_py - 10, 20, 20), Qt.AlignmentFlag.AlignCenter, "⟳")
-            # Drag handle (center)
-            painter.setBrush(handle_fill)
-            painter.drawEllipse(QPoint(rx + rw // 2, ry + rh // 2), self.handle_radius + 1, self.handle_radius + 1)
+                painter.setPen(QPen(handle_color, 2))
+                painter.setBrush(handle_fill)
+                # Get 8 handle positions (corners + edges)
+                pts = [
+                    (rx, ry),
+                    (rx + rw // 2, ry),
+                    (rx + rw, ry),
+                    (rx + rw, ry + rh // 2),
+                    (rx + rw, ry + rh),
+                    (rx + rw // 2, ry + rh),
+                    (rx, ry + rh),
+                    (rx, ry + rh // 2)
+                ]
+                for i, (px, py) in enumerate(pts):
+                    painter.drawEllipse(QPoint(px, py), self.handle_radius, self.handle_radius)
+                # Rotate handle (above top center)
+                rot_px = rx + rw // 2
+                rot_py = ry - self.rotate_handle_offset
+                painter.setBrush(handle_fill.darker(110))
+                painter.drawEllipse(QPoint(rot_px, rot_py), self.handle_radius + 2, self.handle_radius + 2)
+                painter.drawText(QRect(rot_px - 10, rot_py - 10, 20, 20), Qt.AlignmentFlag.AlignCenter, "⟳")
+                # Drag handle (center)
+                painter.setBrush(handle_fill)
+                painter.drawEllipse(QPoint(rx + rw // 2, ry + rh // 2), self.handle_radius + 1, self.handle_radius + 1)
 
             painter.restore()
 
@@ -814,6 +849,93 @@ class TemplateCanvas(QWidget):
         iy = int((p.y() - canvas.y()) * sy)
         return QPoint(ix, iy)
 
+
+# -------------------------
+# Excel Preview Dialog (from provided snippet)
+# -------------------------
+
+class ClickableLabel(QLabel):
+    clicked = pyqtSignal()
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        self.clicked.emit()
+
+
+class ExcelPreviewDialog(QDialog):
+    """Modal dialog showing a sample rendered certificate with zoom and Continue/Go back options."""
+    def __init__(self, parent=None, pixmap: QPixmap = None):
+        super().__init__(parent)
+        self.setWindowTitle("Preview Sample")
+        self.setModal(True)
+        self.setMinimumSize(700, 500)
+
+        self._orig_pixmap = pixmap
+        self._scale = 1.0
+
+        outer = QVBoxLayout(self)
+
+        self.image_label = ClickableLabel()
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        if pixmap:
+            self.image_label.setPixmap(pixmap)
+        outer.addWidget(self.image_label, 1)
+
+        # Slider for zoom (10% - 300%)
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(10, 300)
+        self.slider.setValue(100)
+        self.slider.setToolTip("Zoom %")
+        outer.addWidget(self.slider)
+
+        # Buttons row
+        btn_row = QHBoxLayout()
+        self.btn_back = QPushButton("Go back and edit")
+        self.btn_back.setStyleSheet("background:#fff0f0; color:#900; font-weight:600;")
+        self.btn_continue = QPushButton("Continue")
+        btn_row.addWidget(self.btn_back)
+        btn_row.addStretch(1)
+        btn_row.addWidget(self.btn_continue)
+        outer.addLayout(btn_row)
+
+        # Connections
+        self.slider.valueChanged.connect(self._on_slider)
+        self.image_label.clicked.connect(self._on_image_clicked)
+        self.btn_back.clicked.connect(self._on_back)
+        self.btn_continue.clicked.connect(self._on_continue)
+
+        # initial render
+        self._render_scaled()
+
+    def _on_slider(self, v: int):
+        self._scale = v / 100.0
+        self._render_scaled()
+
+    def _on_image_clicked(self):
+        # toggle between fit (slider value) and 200% quick-zoom
+        if abs(self._scale - 2.0) < 0.01:
+            # return to slider value
+            self._scale = self.slider.value() / 100.0
+        else:
+            self._scale = 2.0
+            self.slider.setValue(200)
+        self._render_scaled()
+
+    def _render_scaled(self):
+        if self._orig_pixmap is None:
+            return
+        sw = max(1, int(self._orig_pixmap.width() * self._scale))
+        sh = max(1, int(self._orig_pixmap.height() * self._scale))
+        scaled = self._orig_pixmap.scaled(sw, sh, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        self.image_label.setPixmap(scaled)
+
+    def _on_back(self):
+        # Signal to caller that user wants to edit (reject)
+        self.done(QDialog.DialogCode.Rejected)
+
+    def _on_continue(self):
+        self.done(QDialog.DialogCode.Accepted)
+
     # Note: mouse event handlers for both manual masking and interactive editing
     # are implemented earlier in this class. The older duplicate handlers
     # were removed so they don't override the interactive behavior.
@@ -909,6 +1031,18 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Certificate Mass Production Tool")
+        # Show maximized with title bar, but disable resize/minimize/maximize
+        # Keep close button visible so top-right controls remain present.
+        self.setWindowFlags(
+            Qt.WindowType.Window |
+            Qt.WindowType.CustomizeWindowHint |
+            Qt.WindowType.WindowTitleHint |
+            Qt.WindowType.WindowSystemMenuHint |
+            Qt.WindowType.WindowCloseButtonHint |
+            Qt.WindowType.WindowMinimizeButtonHint |
+            Qt.WindowType.WindowMaximizeButtonHint
+        )
+        # Start maximized with standard title bar controls (-, □, X)
         self.showMaximized()
 
         # State
@@ -1050,6 +1184,11 @@ class MainWindow(QMainWindow):
 
     def on_manual_toggled(self, checked: bool):
         self.template_canvas.set_manual_mode(checked)
+        # Provide clear feedback in the status bar
+        if checked:
+            self.statusBar().showMessage("Manual Masking: ON", 3000)
+        else:
+            self.statusBar().showMessage("Manual Masking: OFF", 3000)
 
     def on_assignment_changed(self, letter: str, text: str):
         for m in self.masks:
@@ -1115,10 +1254,42 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", "Mask variable corresponding string and column name error")
             return
 
-        # Passed validation: Create (row_count - 1) certificate copies (i.e., one per data row)
+        # Passed validation: show a sample preview dialog (first row) for confirmation
         try:
-            self.generate_certificates(df)
-            self.show_generated_list()
+            # Map label_text (column names) -> letter
+            label_to_letter = {m.label_text: m.letter for m in self.masks}
+
+            if df.shape[0] == 0:
+                # No rows to preview; proceed as before
+                self.generate_certificates(df)
+                self.show_generated_list()
+                return
+
+            # Build sample values from first row
+            first_row = df.iloc[0]
+            values_by_letter = {}
+            for col_name, value in first_row.items():
+                letter = label_to_letter.get(str(col_name))
+                if letter:
+                    values_by_letter[letter] = "" if pd.isna(value) else str(value)
+
+            sample_img = self._draw_text_on_image(self.template_img, values_by_letter)
+            sample_pix = QPixmap.fromImage(sample_img)
+
+            dlg = ExcelPreviewDialog(self, sample_pix)
+            res = dlg.exec()
+            if res == QDialog.DialogCode.Accepted:
+                # Continue: generate all certificates and show list
+                self.generate_certificates(df)
+                self.show_generated_list()
+            else:
+                # Go back and allow manual editing
+                self.show_template_preview()
+                # Keep manual masking OFF by default when returning
+                if self.btn_manual.isChecked():
+                    self.btn_manual.setChecked(False)
+                self.template_canvas.set_manual_mode(False)
+                return
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to generate certificates: {e}")
 
@@ -1137,95 +1308,163 @@ class MainWindow(QMainWindow):
         """
         Draws per-mask text with per-variable styles on a copy of the original-size image.
         Ensures text auto-scales to fit inside the mask (both width and height).
+        Handles small text in large regions and large text in small regions intelligently.
         """
         out = QImage(base)  # copy
         painter = QPainter(out)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
         for m in self.masks:
-            text = values_by_letter.get(m.letter, "")
-            if not text:
+            original_text = values_by_letter.get(m.letter, "")
+            if not original_text:
                 continue
             r = m.rect
 
-            # If name has 3 or more words, use only the first two (e.g., "Ambati Venkata Prasad" -> "Ambati Venkata")
-            # This keeps long multi-part names from overflowing small masked regions.
-            words = text.strip().split()
-            if len(words) >= 3:
-                text = " ".join(words[:2]).strip()  # ensure clean trimming
+            # Smart word trimming based on region size
+            words = original_text.strip().split()
+            text = original_text.strip()
+            
+            # Create a test font to measure if full text can fit
+            test_font = QFont()
+            test_font.setBold(m.style.bold)
+            test_font.setItalic(m.style.italic)
+            test_font.setUnderline(m.style.underline)
+            
+            # Use more generous padding to prevent letter clipping (especially descenders)
+            padding = max(12, int(min(r.width(), r.height()) * 0.08))
+            avail_w = max(4, r.width() - (padding * 2))
+            avail_h = max(4, r.height() - (padding * 2))
+            
+            # Test if full text can fit with reasonable font size
+            min_reasonable_size = max(12, int(avail_h * 0.3))  # Minimum readable size
+            test_font.setPointSize(min_reasonable_size)
+            test_fm = QFontMetrics(test_font)
+            full_text_width = test_fm.horizontalAdvance(original_text)
+            
+            # Only apply 3-word rule if region is too small AND text is long
+            if len(words) >= 3 and full_text_width > avail_w * 1.5:
+                # Region is small and text is long, trim to 2 words
+                text = " ".join(words[:2]).strip()
+            # Otherwise use full text
                 
-            # Start with a conservative initial font size based on region size
+            # Start with a font size that accounts for descenders
             f = QFont()
             f.setBold(m.style.bold)
             f.setItalic(m.style.italic)
             f.setUnderline(m.style.underline)
-            # Start with a size that's likely to fit but might need reduction
-            initial_size = min(int(r.height() * 0.7), int(r.width() / (len(text) * 0.7)))
+            
+            # Better initial size estimation
+            char_width_estimate = avail_w / max(1, len(text)) if text else 1
+            height_based_size = int(avail_h * 0.6)  # Leave more room for descenders
+            width_based_size = int(char_width_estimate * 1.2)
+            initial_size = min(height_based_size, width_based_size, 72)  # Cap at 72pt
+            initial_size = max(initial_size, 8)  # Minimum 8pt
 
-            # --- Auto font scaling (robust) ---
-            # Use horizontalAdvance for width and QFontMetrics.height() for height checks.
-            # Determine padding dynamically so small boxes get smaller padding.
-            padding = max(8, int(min(r.width(), r.height()) * 0.06))
-            avail_w = max(4, r.width() - (padding * 2))
-            avail_h = max(4, r.height() - (padding * 2))
-
-            test_font = QFont(f)
-            max_size = int(avail_h)  # don't exceed available height
+            # --- Enhanced Auto font scaling ---
+            max_size = min(int(avail_h * 0.8), 120)  # Don't exceed 80% of height or 120pt
             min_size = 8
             fitted_size = min_size
 
-            # Find the largest point size that fits both width and height
-            for size in range(max_size, min_size - 1, -1):
-                test_font.setPointSize(size)
-                fm = QFontMetrics(test_font)
-                text_w = fm.horizontalAdvance(text)
-                text_h = fm.height()
+            # Binary search for optimal font size
+            low, high = min_size, max_size
+            best_size = min_size
+            
+            while low <= high:
+                mid_size = (low + high) // 2
+                f.setPointSize(mid_size)
+                fm = QFontMetrics(f)
+                
+                # Use boundingRect for more accurate measurements including descenders
+                text_rect = fm.boundingRect(text)
+                text_w = text_rect.width()
+                text_h = fm.height()  # Total height including ascenders and descenders
+                
                 if text_w <= avail_w and text_h <= avail_h:
-                    fitted_size = size
-                    break
-
+                    best_size = mid_size
+                    low = mid_size + 1
+                else:
+                    high = mid_size - 1
+            
+            fitted_size = best_size
             f.setPointSize(fitted_size)
 
-            # Extra shrink loop in case font metrics behave differently when applied by the painter
-            fm_check = QFontMetrics(f)
-            text_w = fm_check.horizontalAdvance(text)
-            text_h = fm_check.height()
-            while (text_w > avail_w or text_h > avail_h) and f.pointSize() > min_size:
-                new_size = max(min_size, int(f.pointSize() * 0.9))
-                if new_size == f.pointSize():
-                    new_size = f.pointSize() - 1
-                f.setPointSize(new_size)
-                fm_check = QFontMetrics(f)
-                text_w = fm_check.horizontalAdvance(text)
-                text_h = fm_check.height()
+            # If user specified an explicit size/family, prefer it but avoid vertical clipping only
+            user_size = getattr(m.style, 'size', None)
+            user_family = getattr(m.style, 'family', '')
+            if user_family:
+                f.setFamily(user_family)
+            user_explicit = bool(user_size and user_size > 0)
+            if user_explicit:
+                # Use exactly the user-selected size for consistent appearance across masks
+                f.setPointSize(int(user_size))
+                fm_final = QFontMetrics(f)
+            else:
+                # No explicit user size; use auto-calculated fm_final
+                fm_final = QFontMetrics(f)
 
-            # Final fallback: if text still doesn't fit horizontally, elide with an ellipsis
-            if text_w > avail_w:
-                try:
-                    elided = fm_check.elidedText(text, Qt.TextElideMode.ElideRight, avail_w)
-                    text = elided
-                    # update measurements
-                    fm_check = QFontMetrics(f)
-                    text_w = fm_check.horizontalAdvance(text)
-                    text_h = fm_check.height()
-                except Exception:
-                    # crude truncation as last resort
-                    if text_w > 0:
-                        approx_chars = max(1, int(len(text) * (avail_w / text_w)))
-                        text = text[:approx_chars]
-                        fm_check = QFontMetrics(f)
-                        text_w = fm_check.horizontalAdvance(text)
-                        text_h = fm_check.height()
+            # Final verification and adjustment
+            fm_final = QFontMetrics(f)
+            final_rect = fm_final.boundingRect(text)
+            final_w = final_rect.width()
+            final_h = fm_final.height()
+            
+            # If still too tall (or too wide when auto-fit), make small adjustments
+            shrink_attempts = 0
+            def needs_shrink():
+                if user_explicit:
+                    # Do not shrink explicit sizes at all; keep the same size even if it overflows
+                    return False
+                else:
+                    return (final_w > avail_w or final_h > avail_h)
+            while needs_shrink() and f.pointSize() > min_size and shrink_attempts < 10:
+                new_size = max(min_size, f.pointSize() - 1)
+                f.setPointSize(new_size)
+                fm_final = QFontMetrics(f)
+                final_rect = fm_final.boundingRect(text)
+                final_w = final_rect.width()
+                final_h = fm_final.height()
+                shrink_attempts += 1
+
+            # Handle case where text is much smaller than available space
+            # If the region is significantly larger than needed, don't make font too small
+            if (not user_explicit) and final_w < avail_w * 0.6 and final_h < avail_h * 0.6 and f.pointSize() < 16:
+                # Try to increase font size for better visibility
+                larger_size = min(24, int(avail_h * 0.7))
+                f.setPointSize(larger_size)
+                fm_test = QFontMetrics(f)
+                test_rect = fm_test.boundingRect(text)
+                if test_rect.width() <= avail_w and fm_test.height() <= avail_h:
+                    # Use the larger size
+                    fm_final = fm_test
+                else:
+                    # Revert to previous size
+                    f.setPointSize(fitted_size)
+                    fm_final = QFontMetrics(f)
 
             painter.setFont(f)
             # Use variable style color if provided
             pen_color = m.style.color if hasattr(m.style, 'color') else QColor(10, 10, 10)
             painter.setPen(pen_color)
 
-            # Draw text centered in the rectangle with proper padding
-            painter.drawText(r.adjusted(padding, padding, -padding, -padding),
-                             Qt.AlignmentFlag.AlignCenter,
-                             text)
+            # Calculate text position: always center horizontally and vertically
+            text_rect = fm_final.boundingRect(text)
+            center_x = r.x() + r.width() // 2
+            center_y = r.y() + r.height() // 2
+
+            text_x = center_x - text_rect.width() // 2
+            # Vertical baseline: center and adjust by ascent/descent
+            text_y = center_y + (fm_final.ascent() - fm_final.descent()) // 2
+
+            # Clamp inside region with padding
+            min_x = r.x() + padding
+            max_x = r.x() + r.width() - text_rect.width() - padding
+            text_x = max(min_x, min(text_x, max_x))
+
+            min_y = r.y() + fm_final.ascent() + padding
+            max_y = r.y() + r.height() - fm_final.descent() - padding
+            text_y = max(min_y, min(text_y, max_y))
+
+            painter.drawText(text_x, text_y, text)
 
         painter.end()  # End painter after all text has been drawn
         return out
@@ -1308,7 +1547,12 @@ class MainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     win = MainWindow()
-    win.showFullScreen()
+    # Ensure window appears on top and focused, not in background
+    win.show()
+    win.showMaximized()
+    win.raise_()
+    win.activateWindow()
+    app.setActiveWindow(win)
     sys.exit(app.exec())
 
 if __name__ == "__main__":
